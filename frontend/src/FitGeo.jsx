@@ -2851,15 +2851,16 @@ export default function FitGeo() {
       // Build correct state from profile (goals) + cached daily progress (weight log, diary, etc.)
       let cached = null;
       try { cached = JSON.parse(localStorage.getItem("fitgeo_state") || "null"); } catch { /* ignore */ }
-      const base = makeCleanState(localProfile);
       const s = cached || {};
-      const registrationW = parseFloat(localProfile.weight) || base.weight.current;
+      const registrationW = parseFloat(localProfile.weight) || 75;
       const storedCurrentW = s.weight?.current || 0;
-      // Detect INIT auto-save corruption: stored=75 but profile says something else
+      // Detect INIT auto-save corruption: stored≈75 but profile says something different
       const isInitCorruption = storedCurrentW > 0 &&
         Math.abs(storedCurrentW - 75) < 0.1 &&
         Math.abs(registrationW - 75) > 0.5;
       const currentW = (storedCurrentW > 0 && !isInitCorruption) ? storedCurrentW : registrationW;
+      // Goals from current tracked weight
+      const base = makeCleanState({ ...localProfile, weight: String(currentW) });
       const storedHistory = s.weight?.history || [];
       const hasRealHistory = storedHistory.length > 1 ||
         (storedHistory.length === 1 && Math.abs((storedHistory[0] || 0) - currentW) < 0.1);
@@ -2898,23 +2899,22 @@ export default function FitGeo() {
   const loadLocalState  = () => { try { const raw = localStorage.getItem(LS_STATE_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; } };
   const clearLocalState = () => { try { localStorage.removeItem(LS_STATE_KEY); } catch {} };
 
-  // Build state from profile (correct goals) + stored progress (diary, calories, tracked weight, etc.)
-  // Goals (calories, macros, water, weight goal) are always recalculated from profile.
-  // Current weight uses the stored tracked value; falls back to registration weight.
-  // INIT-corruption detection: if stored weight == 75 (INIT default) but profile weight differs,
-  // treat it as corrupted and use the profile (registration) weight instead.
+  // Build state from profile (activity, goal, height, age, gender) + stored progress.
+  // Goals are calculated from the RESOLVED current weight (not just registration weight).
+  // INIT-corruption detection: if stored weight == 75 (INIT default) but profile differs,
+  // use the profile (registration) weight instead.
   const buildFromProfile = (profileData, stored) => {
-    const base = makeCleanState(profileData);
     const s = stored || {};
-    const registrationW = parseFloat(profileData?.weight) || base.weight.current;
+    const registrationW = parseFloat(profileData?.weight) || 75;
     const storedCurrentW = s.weight?.current || 0;
-    // Detect INIT auto-save corruption: stored=75 but profile says something else
+    // Detect INIT auto-save corruption: stored≈75 but profile says something different
     const isInitCorruption = storedCurrentW > 0 &&
       Math.abs(storedCurrentW - 75) < 0.1 &&
       Math.abs(registrationW - 75) > 0.5;
     const currentW = (storedCurrentW > 0 && !isInitCorruption) ? storedCurrentW : registrationW;
+    // Always calculate goals from the CURRENT tracked weight (not just registration weight)
+    const base = makeCleanState({ ...profileData, weight: String(currentW) });
     const storedHistory = s.weight?.history || [];
-    // Keep history if user has real entries; otherwise start fresh from current weight
     const hasRealHistory = storedHistory.length > 1 ||
       (storedHistory.length === 1 && Math.abs((storedHistory[0] || 0) - currentW) < 0.1);
     const weightHistory = hasRealHistory ? storedHistory : [currentW];
