@@ -106,7 +106,7 @@ public class AuthController(AppDbContext db, IConfiguration config) : Controller
 
     static object ToProfile(User u) => new { u.Name, u.Age, u.Gender, u.Height, u.Weight, u.Goal, u.Activity, u.IsAdmin };
 
-    internal static object BuildInitialState(User user)
+    static object BuildInitialState(User user)
     {
         // ── Parse profile values ──────────────────────────────────────
         double.TryParse(user.Weight, System.Globalization.NumberStyles.Any,

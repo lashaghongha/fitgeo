@@ -24,66 +24,10 @@ public class StateController(AppDbContext db) : ControllerBase
         if (user is null) return NotFound();
 
         object? appState = null;
-        if (user.AppState?.StateJson is not null)
+        if (user.AppState is not null)
         {
-            try
-            {
-                var doc = JsonSerializer.Deserialize<JsonElement>(user.AppState.StateJson, JsonOpts);
-
-                // Detect corrupted weight: if weight.current == 75 (INIT default)
-                // but the user registered with a different weight, rebuild state from profile.
-                bool needsRepair = false;
-                if (doc.TryGetProperty("weight", out var wEl) &&
-                    wEl.TryGetProperty("current", out var curEl) &&
-                    curEl.TryGetDouble(out double storedW) &&
-                    Math.Abs(storedW - 75.0) < 0.1)
-                {
-                    double.TryParse(user.Weight,
-                        System.Globalization.NumberStyles.Any,
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        out double profileW);
-                    if (profileW > 0 && Math.Abs(profileW - 75.0) > 0.5)
-                        needsRepair = true;
-                }
-
-                if (needsRepair)
-                {
-                    // Rebuild correct state from profile, then graft in any daily
-                    // progress (calories eaten, diary, water, steps) from the stored state.
-                    var fresh = AuthController.BuildInitialState(user);
-                    var freshJson = JsonSerializer.Serialize(fresh, JsonOpts);
-                    var freshEl = JsonSerializer.Deserialize<JsonElement>(freshJson, JsonOpts);
-
-                    // Merge: take fresh goals/weight but preserve today's progress fields
-                    var dict = new Dictionary<string, JsonElement>();
-                    foreach (var prop in freshEl.EnumerateObject())
-                        dict[prop.Name] = prop.Value;
-
-                    // Overwrite fresh with stored daily-progress fields
-                    foreach (var field in new[] { "calories", "protein", "carbs", "fat", "water", "steps", "diary", "chatHistory", "measurements", "challenges", "achievements" })
-                    {
-                        if (doc.TryGetProperty(field, out var storedField))
-                            dict[field] = storedField;
-                    }
-
-                    var repairedJson = JsonSerializer.Serialize(dict, JsonOpts);
-
-                    // Persist the repaired state so the corruption is gone permanently
-                    user.AppState!.StateJson = repairedJson;
-                    user.AppState.UpdatedAt = DateTime.UtcNow;
-                    await db.SaveChangesAsync();
-
-                    appState = JsonSerializer.Deserialize<object>(repairedJson, JsonOpts);
-                }
-                else
-                {
-                    appState = JsonSerializer.Deserialize<object>(user.AppState.StateJson, JsonOpts);
-                }
-            }
-            catch
-            {
-                try { appState = JsonSerializer.Deserialize<object>(user.AppState.StateJson, JsonOpts); } catch { }
-            }
+            try { appState = JsonSerializer.Deserialize<object>(user.AppState.StateJson, JsonOpts); }
+            catch { }
         }
 
         return Ok(new
