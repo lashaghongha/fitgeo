@@ -66,6 +66,13 @@ export async function saveState(state) {
   });
 }
 
+export async function updateProfile(profile) {
+  return request("/state/profile", {
+    method: "PUT",
+    body: JSON.stringify(profile),
+  });
+}
+
 export async function get(path) {
   return request(path);
 }
