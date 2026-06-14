@@ -2953,8 +2953,20 @@ export default function FitGeo() {
           localStorage.setItem("fitgeo_profile", JSON.stringify(data.profile));
         }
         if (profileData) {
-          // Always derive goals + weight from profile, take daily progress from stored state
-          const built = buildFromProfile(profileData, data?.appState);
+          // Prefer localStorage weight if server has corrupted default (75)
+          // and localStorage has a real tracked value that differs.
+          const localCached = loadLocalState();
+          const serverW = data?.appState?.weight?.current;
+          const localW  = localCached?.weight?.current;
+          const serverIsDefault = !serverW || Math.abs(serverW - 75) < 0.1;
+          const localIsReal     = localW && Math.abs(localW - 75) > 0.5;
+          const mergedAppState  = (serverIsDefault && localIsReal)
+            ? { ...data?.appState,
+                weight: { ...(data?.appState?.weight || {}),
+                           current: localW,
+                           history: localCached?.weight?.history || [localW] } }
+            : data?.appState;
+          const built = buildFromProfile(profileData, mergedAppState);
           setState(built);
           saveLocalState(built);
           api.saveState(built).catch(() => {});
