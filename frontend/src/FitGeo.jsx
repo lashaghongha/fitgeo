@@ -2844,9 +2844,14 @@ const LS_PROFILE = "fitgeo_profile";
 const lsGet = key => { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } };
 const lsSet = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} };
 
-// Merge saved appState with current profile — recalculates goals in case profile changed
+// Merge saved appState with current profile.
+// IMPORTANT: weight.current is ALWAYS taken from profile.weight (Users table in DB),
+// not from the appState JSON blob. This prevents stale/corrupted blob values from
+// overriding the correct weight. The Users table is updated by api.updateProfile()
+// whenever the user logs their weight, so it is always the authoritative source.
 function mergeWithProfile(savedState, profile) {
-  const goals = makeCleanState(profile);
+  const goals    = makeCleanState(profile);
+  const profileW = parseFloat(profile?.weight) || goals.weight.current;
   return {
     ...savedState,
     calories: { ...savedState.calories, goal: goals.calories.goal },
@@ -2854,7 +2859,13 @@ function mergeWithProfile(savedState, profile) {
     carbs:    { ...savedState.carbs,    goal: goals.carbs.goal    },
     fat:      { ...savedState.fat,      goal: goals.fat.goal      },
     water:    { ...savedState.water,    goal: goals.water.goal    },
-    weight:   { ...savedState.weight,   goal: goals.weight.goal   },
+    weight: {
+      current: profileW,
+      goal:    goals.weight.goal,
+      history: savedState.weight?.history?.length
+                 ? savedState.weight.history
+                 : [profileW],
+    },
   };
 }
 
@@ -2862,11 +2873,13 @@ export default function FitGeo() {
   const [profile, setProfile] = useState(() => lsGet(LS_PROFILE));
   const [tab, setTab]         = useState("home");
 
-  // Show something instantly from localStorage while server responds
+  // Show something instantly from localStorage while server responds.
+  // mergeWithProfile ensures weight.current = profile.weight (not the blob value).
   const [state, setState] = useState(() => {
     const prof = lsGet(LS_PROFILE);
     if (!api.getToken() || !prof) return INIT;
     const saved = lsGet(LS_STATE);
+    // Always use profile.weight as the current weight even for the optimistic initial state
     return saved ? mergeWithProfile(saved, prof) : makeCleanState(prof);
   });
 
