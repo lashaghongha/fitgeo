@@ -13,9 +13,17 @@ var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL");
 builder.Services.AddDbContext<AppDbContext>(opt =>
 {
     if (!string.IsNullOrEmpty(databaseUrl))
-        opt.UseNpgsql(databaseUrl);
+    {
+        // Convert postgresql://user:pass@host:port/db → Npgsql connection string
+        var uri = new Uri(databaseUrl);
+        var userInfo = uri.UserInfo.Split(':');
+        var npgsqlConn = $"Host={uri.Host};Port={uri.Port};Database={uri.AbsolutePath.TrimStart('/')};Username={userInfo[0]};Password={userInfo[1]};SSL Mode=Require;Trust Server Certificate=true;";
+        opt.UseNpgsql(npgsqlConn);
+    }
     else
+    {
         opt.UseSqlite(builder.Configuration.GetConnectionString("Default") ?? "Data Source=fitgeo.db");
+    }
 });
 
 var jwtKey = builder.Configuration["Jwt:Key"]
