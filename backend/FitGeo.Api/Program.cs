@@ -98,7 +98,20 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    ctx.Database.EnsureCreated(); // works for both SQLite and Postgres (no migrations needed)
+
+    // EnsureCreated() does nothing if DB already exists (Railway pre-creates it).
+    // So we check if our tables exist and create them manually if not.
+    bool tablesExist;
+    try { tablesExist = await ctx.Users.AnyAsync(); tablesExist = true; }
+    catch { tablesExist = false; }
+
+    if (!tablesExist)
+    {
+        // Generate and run the full CREATE TABLE script
+        var script = ctx.Database.GenerateCreateScript();
+        await ctx.Database.ExecuteSqlRawAsync(script);
+    }
+
     await MealSeed.SeedAsync(ctx);
 }
 
