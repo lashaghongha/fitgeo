@@ -2977,19 +2977,19 @@ export default function FitGeo() {
           setState(built);
           saveLocalState(built);
           api.saveState(built).catch(() => {});
+          // Show weight prompt if weight looks like INIT default (75, no real history)
+          const finalW = built.weight?.current;
+          if (finalW !== undefined && Math.abs(finalW - 75) < 0.1) {
+            const hist = built.weight?.history || [];
+            const hasOnlyDefault = hist.length === 0 || hist.every(w => Math.abs(w - 75) < 0.1);
+            if (hasOnlyDefault) setShowWeightModal(true);
+          }
         } else if (data?.appState) {
           const merged = mergeState(data.appState);
           setState(merged);
           saveLocalState(merged);
         }
         setStateReady(true);
-        // If weight looks like INIT default (75, no real history), prompt user to enter real weight
-        const finalW = built?.weight?.current ?? state.weight?.current;
-        if (finalW !== undefined && Math.abs(finalW - 75) < 0.1) {
-          const hist = built?.weight?.history || state.weight?.history || [];
-          const hasOnlyDefault = hist.length === 0 || hist.every(w => Math.abs(w - 75) < 0.1);
-          if (hasOnlyDefault) setShowWeightModal(true);
-        }
       })
       .catch(() => {
         const localProfile = JSON.parse(localStorage.getItem("fitgeo_profile") || "null");
