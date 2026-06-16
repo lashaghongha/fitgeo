@@ -2081,6 +2081,11 @@ function ProfilePage({ profile, onLogout, onAdmin, onProfileUpdate }) {
     const v = parseFloat(newWeight);
     if (!v || v < 20 || v > 300) return;
     updateState(p => ({ weight: { ...p.weight, current: v, history: [...(p.weight.history || []), v] } }));
+    // Update profile.weight so refresh always shows correct weight (not INIT default 75)
+    const newProfile = { ...profile, weight: String(v) };
+    setProfile(newProfile);
+    localStorage.setItem("fitgeo_profile", JSON.stringify(newProfile));
+    api.updateProfile({ weight: String(v) }).catch(() => {});
     setNewWeight("");
     showToast("⚖️ წონა განახლდა!");
   };
