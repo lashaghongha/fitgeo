@@ -2842,172 +2842,114 @@ function AdminPanel({ onExit }) {
 }
 
 // ─── ROOT APP ──────────────────────────────────────────────────────────────
+
+// ── localStorage helpers ────────────────────────────────────────────────────
+const LS_STATE   = "fitgeo_state";
+const LS_PROFILE = "fitgeo_profile";
+const lsGet  = key => { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } };
+const lsSet  = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} };
+
+// ── Build full state from profile + stored progress ─────────────────────────
+// currentW is the single source of truth for weight.
+// Priority: stored state weight → profile (registration) weight → 75 fallback
+function buildState(profileData, storedState) {
+  const s   = storedState || {};
+  const stW = s.weight?.current || 0;          // tracked weight from stored state
+  const prW = parseFloat(profileData?.weight) || 75; // registration weight
+  const currentW = stW > 0 ? stW : prW;        // prefer tracked, fallback to registration
+  const base = makeCleanState({ ...profileData, weight: String(currentW) });
+  return {
+    ...base,
+    calories:     { goal: base.calories.goal,  current: s.calories?.current  || 0 },
+    protein:      { goal: base.protein.goal,   current: s.protein?.current   || 0 },
+    carbs:        { goal: base.carbs.goal,     current: s.carbs?.current     || 0 },
+    fat:          { goal: base.fat.goal,       current: s.fat?.current       || 0 },
+    water:        { goal: base.water.goal,     current: s.water?.current     || 0 },
+    steps:        { goal: base.steps.goal,     current: s.steps?.current     || 0 },
+    weight:       { goal: base.weight.goal,    current: currentW,
+                    history: s.weight?.history?.length ? s.weight.history : [currentW] },
+    diary:        { breakfast: [], lunch: [], dinner: [], snacks: [], ...(s.diary || {}) },
+    chatHistory:  s.chatHistory  || base.chatHistory,
+    measurements: s.measurements || base.measurements,
+    challenges:   s.challenges   || base.challenges,
+    achievements: s.achievements || base.achievements,
+  };
+}
+
 export default function FitGeo() {
-  const [profile, setProfile] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("fitgeo_profile")); } catch { return null; }
-  });
-  const [tab, setTab] = useState("home");
+  const [profile, setProfile] = useState(() => lsGet(LS_PROFILE));
+  const [tab, setTab]         = useState("home");
+
+  // Initial state from localStorage — shown instantly before server responds
   const [state, setState] = useState(() => {
     if (!api.getToken()) return INIT;
-    // Profile is the source of truth for weight/goals — always use it if available
-    let localProfile = null;
-    try { localProfile = JSON.parse(localStorage.getItem("fitgeo_profile") || "null"); } catch { /* ignore */ }
-    if (localProfile) {
-      // Build correct state from profile (goals) + cached daily progress (weight log, diary, etc.)
-      let cached = null;
-      try { cached = JSON.parse(localStorage.getItem("fitgeo_state") || "null"); } catch { /* ignore */ }
-      const s = cached || {};
-      const registrationW = parseFloat(localProfile.weight) || 75;
-      const storedCurrentW = s.weight?.current || 0;
-      // Detect INIT auto-save corruption: stored≈75 but profile says something different
-      const isInitCorruption = storedCurrentW > 0 &&
-        Math.abs(storedCurrentW - 75) < 0.1 &&
-        Math.abs(registrationW - 75) > 0.5;
-      const currentW = (storedCurrentW > 0 && !isInitCorruption) ? storedCurrentW : registrationW;
-      // Goals from current tracked weight
-      const base = makeCleanState({ ...localProfile, weight: String(currentW) });
-      const storedHistory = s.weight?.history || [];
-      const hasRealHistory = storedHistory.length > 1 ||
-        (storedHistory.length === 1 && Math.abs((storedHistory[0] || 0) - currentW) < 0.1);
-      return {
-        ...base,
-        calories:     { goal: base.calories.goal,  current: s.calories?.current  || 0 },
-        protein:      { goal: base.protein.goal,   current: s.protein?.current   || 0 },
-        carbs:        { goal: base.carbs.goal,     current: s.carbs?.current     || 0 },
-        fat:          { goal: base.fat.goal,       current: s.fat?.current       || 0 },
-        water:        { goal: base.water.goal,     current: s.water?.current     || 0 },
-        steps:        { goal: base.steps.goal,     current: s.steps?.current     || 0 },
-        weight:       { goal: base.weight.goal,    current: currentW, history: hasRealHistory ? storedHistory : [currentW] },
-        diary:        { breakfast: [], lunch: [], dinner: [], snacks: [], ...(s.diary || {}) },
-        chatHistory:  s.chatHistory  || base.chatHistory,
-        measurements: s.measurements || base.measurements,
-        challenges:   s.challenges   || base.challenges,
-        achievements: s.achievements || base.achievements,
-      };
-    }
-    return INIT;
+    const prof = lsGet(LS_PROFILE);
+    if (!prof) return INIT;
+    return buildState(prof, lsGet(LS_STATE));
   });
-  const [showAdd, setShowAdd] = useState(false);
-  const [toast, setToast] = useState(null);
-  const [appLoading, setAppLoading] = useState(!!api.getToken());
-  // stateReady: false until backend state is successfully loaded (or confirmed absent).
-  // Auto-save is blocked until stateReady = true to prevent INIT from overwriting real data.
-  const [stateReady, setStateReady] = useState(!api.getToken());
-  const [showAdmin, setShowAdmin] = useState(false);
+
+  const [showAdd,         setShowAdd]         = useState(false);
+  const [toast,           setToast]           = useState(null);
+  const [appLoading,      setAppLoading]      = useState(!!api.getToken());
+  const [stateReady,      setStateReady]      = useState(!api.getToken());
+  const [showAdmin,       setShowAdmin]       = useState(false);
   const [showWeightModal, setShowWeightModal] = useState(false);
-  const [weightModalInput, setWeightModalInput] = useState("");
+  const [weightModalInput,setWeightModalInput]= useState("");
 
-  const showToast = msg => { setToast(msg); setTimeout(() => setToast(null), 2200); };
-  const updateState = useCallback(fn => setState(p => ({ ...p, ...fn(p) })), []);
+  const showToast    = msg => { setToast(msg); setTimeout(() => setToast(null), 2200); };
+  const updateState  = useCallback(fn => setState(p => ({ ...p, ...fn(p) })), []);
+  const saveLocal    = s  => lsSet(LS_STATE, s);
 
-  // ── helpers: localStorage state cache ───────────────────────────────────
-  const LS_STATE_KEY = "fitgeo_state";
-  const saveLocalState  = (s) => { try { localStorage.setItem(LS_STATE_KEY, JSON.stringify(s)); } catch {} };
-  const loadLocalState  = () => { try { const raw = localStorage.getItem(LS_STATE_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; } };
-  const clearLocalState = () => { try { localStorage.removeItem(LS_STATE_KEY); } catch {} };
-
-  // Build state from profile (activity, goal, height, age, gender) + stored progress.
-  // Goals are calculated from the RESOLVED current weight (not just registration weight).
-  // INIT-corruption detection: if stored weight == 75 (INIT default) but profile differs,
-  // use the profile (registration) weight instead.
-  const buildFromProfile = (profileData, stored) => {
-    const s = stored || {};
-    const registrationW = parseFloat(profileData?.weight) || 75;
-    const storedCurrentW = s.weight?.current || 0;
-    // Detect INIT auto-save corruption: stored≈75 but profile says something different
-    const isInitCorruption = storedCurrentW > 0 &&
-      Math.abs(storedCurrentW - 75) < 0.1 &&
-      Math.abs(registrationW - 75) > 0.5;
-    const currentW = (storedCurrentW > 0 && !isInitCorruption) ? storedCurrentW : registrationW;
-    // Always calculate goals from the CURRENT tracked weight (not just registration weight)
-    const base = makeCleanState({ ...profileData, weight: String(currentW) });
-    const storedHistory = s.weight?.history || [];
-    const hasRealHistory = storedHistory.length > 1 ||
-      (storedHistory.length === 1 && Math.abs((storedHistory[0] || 0) - currentW) < 0.1);
-    const weightHistory = hasRealHistory ? storedHistory : [currentW];
-    return {
-      ...base,
-      calories:     { goal: base.calories.goal,  current: s.calories?.current  || 0 },
-      protein:      { goal: base.protein.goal,   current: s.protein?.current   || 0 },
-      carbs:        { goal: base.carbs.goal,     current: s.carbs?.current     || 0 },
-      fat:          { goal: base.fat.goal,       current: s.fat?.current       || 0 },
-      water:        { goal: base.water.goal,     current: s.water?.current     || 0 },
-      steps:        { goal: base.steps.goal,     current: s.steps?.current     || 0 },
-      weight:       { goal: base.weight.goal,    current: currentW, history: weightHistory },
-      diary:        { breakfast: [], lunch: [], dinner: [], snacks: [], ...(s.diary || {}) },
-      chatHistory:  s.chatHistory  || base.chatHistory,
-      measurements: s.measurements || base.measurements,
-      challenges:   s.challenges   || base.challenges,
-      achievements: s.achievements || base.achievements,
-    };
-  };
-
-  // Simple merge for when we don't have profile yet (edge case)
-  const mergeState = (s) => ({
-    ...INIT,
-    ...s,
-    diary: { breakfast: [], lunch: [], dinner: [], snacks: [], ...(s?.diary || {}) },
-  });
-
-  // load state from backend on mount if token exists
+  // ── Load state from server on mount ────────────────────────────────────────
   useEffect(() => {
     if (!api.getToken()) { setAppLoading(false); setStateReady(true); return; }
+
     api.getState()
       .then(data => {
-        const profileData = data?.profile || JSON.parse(localStorage.getItem("fitgeo_profile") || "null");
-        if (data?.profile) {
-          // Never let server's default weight=75 overwrite a real locally-saved weight
-          const localProfile = JSON.parse(localStorage.getItem("fitgeo_profile") || "null");
-          const localW  = parseFloat(localProfile?.weight) || 0;
-          const serverW = parseFloat(data.profile?.weight) || 75;
-          const merged  = (localW > 0 && Math.abs(localW - 75) > 0.5 && Math.abs(serverW - 75) < 0.1)
-            ? { ...data.profile, weight: String(localW) }
-            : data.profile;
-          setProfile(merged);
-          localStorage.setItem("fitgeo_profile", JSON.stringify(merged));
+        // 1. Resolve profile: server profile wins, but keep local weight if server has none
+        const serverProf = data?.profile;
+        const localProf  = lsGet(LS_PROFILE);
+        const prof = serverProf || localProf;
+        if (serverProf) {
+          setProfile(serverProf);
+          lsSet(LS_PROFILE, serverProf);
         }
-        if (profileData) {
-          // Prefer localStorage weight if server has corrupted default (75)
-          // and localStorage has a real tracked value that differs.
-          const localCached = loadLocalState();
-          const serverW = data?.appState?.weight?.current;
-          const localW  = localCached?.weight?.current;
-          const serverIsDefault = !serverW || Math.abs(serverW - 75) < 0.1;
-          const localIsReal     = localW && Math.abs(localW - 75) > 0.5;
-          const mergedAppState  = (serverIsDefault && localIsReal)
-            ? { ...data?.appState,
+
+        if (prof) {
+          // 2. Resolve current weight: prefer whichever source has a real (non-zero) value
+          const localState  = lsGet(LS_STATE);
+          const serverW     = data?.appState?.weight?.current || 0;
+          const localW      = localState?.weight?.current     || 0;
+          // Pick the best available weight
+          const bestW = serverW > 0 ? serverW : localW;
+
+          // 3. Merge appState: use server as base, override weight with bestW if server had none
+          const mergedAppState = serverW > 0
+            ? data.appState
+            : { ...(data?.appState || {}),
                 weight: { ...(data?.appState?.weight || {}),
-                           current: localW,
-                           history: localCached?.weight?.history || [localW] } }
-            : data?.appState;
-          const built = buildFromProfile(profileData, mergedAppState);
+                           current:  bestW,
+                           history:  localState?.weight?.history || (bestW > 0 ? [bestW] : []) } };
+
+          const built = buildState(prof, mergedAppState);
           setState(built);
-          saveLocalState(built);
+          saveLocal(built);
           api.saveState(built).catch(() => {});
-          // Show weight prompt if weight looks like INIT default (75, no real history)
-          const finalW = built.weight?.current;
-          if (finalW !== undefined && Math.abs(finalW - 75) < 0.1) {
-            const hist = built.weight?.history || [];
-            const hasOnlyDefault = hist.length === 0 || hist.every(w => Math.abs(w - 75) < 0.1);
-            if (hasOnlyDefault) setShowWeightModal(true);
+
+          // 4. Show weight prompt if no real weight is set yet
+          if (built.weight.current <= 0 || Math.abs(built.weight.current - 75) < 0.1) {
+            const hist = built.weight.history || [];
+            if (hist.every(w => Math.abs(w - 75) < 0.1)) setShowWeightModal(true);
           }
-        } else if (data?.appState) {
-          const merged = mergeState(data.appState);
-          setState(merged);
-          saveLocalState(merged);
         }
         setStateReady(true);
       })
       .catch(() => {
-        const localProfile = JSON.parse(localStorage.getItem("fitgeo_profile") || "null");
-        const cached = loadLocalState();
-        if (localProfile) {
-          setState(buildFromProfile(localProfile, cached));
-          setStateReady(true);
-        } else if (cached) {
-          setState(mergeState(cached));
-          setStateReady(true);
-        }
+        // Server down — use localStorage
+        const prof = lsGet(LS_PROFILE);
+        const cached = lsGet(LS_STATE);
+        if (prof) { setState(buildState(prof, cached)); setStateReady(true); }
+        else if (cached) { setState({ ...INIT, ...cached }); setStateReady(true); }
       })
       .finally(() => setAppLoading(false));
   }, []);
@@ -3017,18 +2959,21 @@ export default function FitGeo() {
     if (!api.getToken() || appLoading || !stateReady) return;
     const t = setTimeout(() => {
       api.saveState(state).catch(() => {});
-      saveLocalState(state);   // always keep localStorage mirror up to date
+      saveLocal(state);
     }, 1500);
     return () => clearTimeout(t);
   }, [state, appLoading, stateReady]);
 
+  // ── User confirms/enters their current weight ───────────────────────────
   const handleWeightModalSubmit = () => {
     const w = parseFloat(weightModalInput);
     if (!w || w < 20 || w > 300) return;
-    updateState(p => ({ weight: { ...p.weight, current: w, history: [w] } }));
+    // Update state + both storages + backend profile
     const newProfile = { ...profile, weight: String(w) };
+    const newState   = s => ({ weight: { ...s.weight, current: w, history: [w] } });
     setProfile(newProfile);
-    localStorage.setItem("fitgeo_profile", JSON.stringify(newProfile));
+    lsSet(LS_PROFILE, newProfile);
+    updateState(newState);
     api.updateProfile({ weight: String(w) }).catch(() => {});
     setShowWeightModal(false);
     setWeightModalInput("");
@@ -3036,31 +2981,28 @@ export default function FitGeo() {
   };
 
   const handleOnboardingDone = (profileData, serverState) => {
-    // Set profile immediately so UI can render
-    localStorage.setItem("fitgeo_profile", JSON.stringify(profileData));
+    lsSet(LS_PROFILE, profileData);
     setProfile(profileData);
-
-    // Always build from profile — goals and weight come from profile, not from stored state
-    const built = buildFromProfile(profileData, serverState);
+    const built = buildState(profileData, serverState);
     setState(built);
-    saveLocalState(built);
+    saveLocal(built);
     api.saveState(built).catch(() => {});
     setStateReady(true);
   };
 
   const handleLogout = () => {
     api.clearToken();
-    localStorage.removeItem("fitgeo_profile");
-    clearLocalState();
+    localStorage.removeItem(LS_PROFILE);
+    localStorage.removeItem(LS_STATE);
     setProfile(null);
-    setState(makeCleanState(null));
+    setState(INIT);
     setStateReady(false);
   };
 
   const handleProfileUpdate = async (fields) => {
     const updated = await api.updateProfile(fields);
     const newProfile = { ...profile, ...updated };
-    localStorage.setItem("fitgeo_profile", JSON.stringify(newProfile));
+    lsSet(LS_PROFILE, newProfile);
     setProfile(newProfile);
     // Recalculate goals from updated profile, keep current consumption values
     const goals = makeCleanState(newProfile);
