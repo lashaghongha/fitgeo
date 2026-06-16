@@ -149,7 +149,7 @@ function LoginModal({ onDone, onClose }) {
     setError(null);
     try {
       const res = await api.login(name.trim(), isAdmin ? password : undefined);
-      onDone(res.profile ?? { name: name.trim() }, res.state);
+      onDone(res.profile ?? { name: name.trim() }, res.appState ?? null);
     } catch (e) {
       setError(e.message || "მომხმარებელი ვერ მოიძებნა");
     } finally {
@@ -227,7 +227,7 @@ function Onboarding({ onDone }) {
     setLoading(true);
     try {
       const res = await api.register(d);
-      onDone(res.profile ?? d, res.state);
+      onDone(res.profile ?? d, res.appState ?? null);
     } catch {
       onDone(d, null);
     } finally {
@@ -2081,10 +2081,6 @@ function ProfilePage({ profile, onLogout, onAdmin, onProfileUpdate }) {
     const v = parseFloat(newWeight);
     if (!v || v < 20 || v > 300) return;
     updateState(p => ({ weight: { ...p.weight, current: v, history: [...(p.weight.history || []), v] } }));
-    // Update profile.weight so refresh always shows correct weight (not INIT default 75)
-    const newProfile = { ...profile, weight: String(v) };
-    setProfile(newProfile);
-    localStorage.setItem("fitgeo_profile", JSON.stringify(newProfile));
     api.updateProfile({ weight: String(v) }).catch(() => {});
     setNewWeight("");
     showToast("⚖️ წონა განახლდა!");
@@ -2843,36 +2839,22 @@ function AdminPanel({ onExit }) {
 
 // ─── ROOT APP ──────────────────────────────────────────────────────────────
 
-// ── localStorage helpers ────────────────────────────────────────────────────
 const LS_STATE   = "fitgeo_state";
 const LS_PROFILE = "fitgeo_profile";
-const lsGet  = key => { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } };
-const lsSet  = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} };
+const lsGet = key => { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } };
+const lsSet = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} };
 
-// ── Build full state from profile + stored progress ─────────────────────────
-// currentW is the single source of truth for weight.
-// Priority: stored state weight → profile (registration) weight → 75 fallback
-function buildState(profileData, storedState) {
-  const s   = storedState || {};
-  const stW = s.weight?.current || 0;          // tracked weight from stored state
-  const prW = parseFloat(profileData?.weight) || 75; // registration weight
-  const currentW = stW > 0 ? stW : prW;        // prefer tracked, fallback to registration
-  const base = makeCleanState({ ...profileData, weight: String(currentW) });
+// Merge saved appState with current profile — recalculates goals in case profile changed
+function mergeWithProfile(savedState, profile) {
+  const goals = makeCleanState(profile);
   return {
-    ...base,
-    calories:     { goal: base.calories.goal,  current: s.calories?.current  || 0 },
-    protein:      { goal: base.protein.goal,   current: s.protein?.current   || 0 },
-    carbs:        { goal: base.carbs.goal,     current: s.carbs?.current     || 0 },
-    fat:          { goal: base.fat.goal,       current: s.fat?.current       || 0 },
-    water:        { goal: base.water.goal,     current: s.water?.current     || 0 },
-    steps:        { goal: base.steps.goal,     current: s.steps?.current     || 0 },
-    weight:       { goal: base.weight.goal,    current: currentW,
-                    history: s.weight?.history?.length ? s.weight.history : [currentW] },
-    diary:        { breakfast: [], lunch: [], dinner: [], snacks: [], ...(s.diary || {}) },
-    chatHistory:  s.chatHistory  || base.chatHistory,
-    measurements: s.measurements || base.measurements,
-    challenges:   s.challenges   || base.challenges,
-    achievements: s.achievements || base.achievements,
+    ...savedState,
+    calories: { ...savedState.calories, goal: goals.calories.goal },
+    protein:  { ...savedState.protein,  goal: goals.protein.goal  },
+    carbs:    { ...savedState.carbs,    goal: goals.carbs.goal    },
+    fat:      { ...savedState.fat,      goal: goals.fat.goal      },
+    water:    { ...savedState.water,    goal: goals.water.goal    },
+    weight:   { ...savedState.weight,   goal: goals.weight.goal   },
   };
 }
 
@@ -2880,113 +2862,77 @@ export default function FitGeo() {
   const [profile, setProfile] = useState(() => lsGet(LS_PROFILE));
   const [tab, setTab]         = useState("home");
 
-  // Initial state from localStorage — shown instantly before server responds
+  // Show something instantly from localStorage while server responds
   const [state, setState] = useState(() => {
-    if (!api.getToken()) return INIT;
     const prof = lsGet(LS_PROFILE);
-    if (!prof) return INIT;
-    return buildState(prof, lsGet(LS_STATE));
+    if (!api.getToken() || !prof) return INIT;
+    const saved = lsGet(LS_STATE);
+    return saved ? mergeWithProfile(saved, prof) : makeCleanState(prof);
   });
 
-  const [showAdd,         setShowAdd]         = useState(false);
-  const [toast,           setToast]           = useState(null);
-  const [appLoading,      setAppLoading]      = useState(!!api.getToken());
-  const [stateReady,      setStateReady]      = useState(!api.getToken());
-  const [showAdmin,       setShowAdmin]       = useState(false);
-  const [showWeightModal, setShowWeightModal] = useState(false);
-  const [weightModalInput,setWeightModalInput]= useState("");
+  const [showAdd,    setShowAdd]    = useState(false);
+  const [toast,      setToast]      = useState(null);
+  const [appLoading, setAppLoading] = useState(!!api.getToken());
+  const [stateReady, setStateReady] = useState(!api.getToken());
+  const [showAdmin,  setShowAdmin]  = useState(false);
 
-  const showToast    = msg => { setToast(msg); setTimeout(() => setToast(null), 2200); };
-  const updateState  = useCallback(fn => setState(p => ({ ...p, ...fn(p) })), []);
-  const saveLocal    = s  => lsSet(LS_STATE, s);
+  const showToast   = msg => { setToast(msg); setTimeout(() => setToast(null), 2200); };
+  const updateState = useCallback(fn => setState(p => ({ ...p, ...fn(p) })), []);
 
-  // ── Load state from server on mount ────────────────────────────────────────
+  // Load authoritative state from server on mount
   useEffect(() => {
     if (!api.getToken()) { setAppLoading(false); setStateReady(true); return; }
 
     api.getState()
       .then(data => {
-        // 1. Resolve profile: server profile wins, but keep local weight if server has none
-        const serverProf = data?.profile;
-        const localProf  = lsGet(LS_PROFILE);
-        const prof = serverProf || localProf;
-        if (serverProf) {
-          setProfile(serverProf);
-          lsSet(LS_PROFILE, serverProf);
-        }
+        const prof = data?.profile;
+        if (prof) { setProfile(prof); lsSet(LS_PROFILE, prof); }
+        const resolvedProfile = prof || lsGet(LS_PROFILE);
 
-        if (prof) {
-          // 2. Resolve current weight: prefer whichever source has a real (non-zero) value
-          const localState  = lsGet(LS_STATE);
-          const serverW     = data?.appState?.weight?.current || 0;
-          const localW      = localState?.weight?.current     || 0;
-          // Pick the best available weight
-          const bestW = serverW > 0 ? serverW : localW;
-
-          // 3. Merge appState: use server as base, override weight with bestW if server had none
-          const mergedAppState = serverW > 0
-            ? data.appState
-            : { ...(data?.appState || {}),
-                weight: { ...(data?.appState?.weight || {}),
-                           current:  bestW,
-                           history:  localState?.weight?.history || (bestW > 0 ? [bestW] : []) } };
-
-          const built = buildState(prof, mergedAppState);
-          setState(built);
-          saveLocal(built);
-          api.saveState(built).catch(() => {});
-
-          // 4. Show weight prompt if no real weight is set yet
-          if (built.weight.current <= 0 || Math.abs(built.weight.current - 75) < 0.1) {
-            const hist = built.weight.history || [];
-            if (hist.every(w => Math.abs(w - 75) < 0.1)) setShowWeightModal(true);
+        if (resolvedProfile) {
+          const serverAppState = data?.appState;
+          let built;
+          if (serverAppState) {
+            // Returning user with saved state — use it, refresh goals from profile
+            built = mergeWithProfile(serverAppState, resolvedProfile);
+          } else {
+            // New user — build fresh state, immediately persist to server
+            built = makeCleanState(resolvedProfile);
+            api.saveState(built).catch(() => {});
           }
+          setState(built);
+          lsSet(LS_STATE, built);
         }
-        setStateReady(true);
       })
       .catch(() => {
-        // Server down — use localStorage
-        const prof = lsGet(LS_PROFILE);
-        const cached = lsGet(LS_STATE);
-        if (prof) { setState(buildState(prof, cached)); setStateReady(true); }
-        else if (cached) { setState({ ...INIT, ...cached }); setStateReady(true); }
+        // Server unavailable — use localStorage as fallback
+        const prof  = lsGet(LS_PROFILE);
+        const saved = lsGet(LS_STATE);
+        if (prof && saved) setState(mergeWithProfile(saved, prof));
+        else if (prof)     setState(makeCleanState(prof));
       })
-      .finally(() => setAppLoading(false));
+      .finally(() => { setAppLoading(false); setStateReady(true); });
   }, []);
 
-  // debounced auto-save — blocked until state is confirmed loaded from backend
+  // Debounced auto-save — only after server state is confirmed loaded
   useEffect(() => {
     if (!api.getToken() || appLoading || !stateReady) return;
     const t = setTimeout(() => {
       api.saveState(state).catch(() => {});
-      saveLocal(state);
+      lsSet(LS_STATE, state);
     }, 1500);
     return () => clearTimeout(t);
   }, [state, appLoading, stateReady]);
 
-  // ── User confirms/enters their current weight ───────────────────────────
-  const handleWeightModalSubmit = () => {
-    const w = parseFloat(weightModalInput);
-    if (!w || w < 20 || w > 300) return;
-    // Update state + both storages + backend profile
-    const newProfile = { ...profile, weight: String(w) };
-    const newState   = s => ({ weight: { ...s.weight, current: w, history: [w] } });
-    setProfile(newProfile);
-    lsSet(LS_PROFILE, newProfile);
-    updateState(newState);
-    api.updateProfile({ weight: String(w) }).catch(() => {});
-    setShowWeightModal(false);
-    setWeightModalInput("");
-    showToast("⚖️ წონა განახლდა!");
-  };
-
-  const handleOnboardingDone = (profileData, serverState) => {
+  const handleOnboardingDone = (profileData, serverAppState) => {
     lsSet(LS_PROFILE, profileData);
     setProfile(profileData);
-    const built = buildState(profileData, serverState);
+    const built = serverAppState
+      ? mergeWithProfile(serverAppState, profileData)
+      : makeCleanState(profileData);
     setState(built);
-    saveLocal(built);
-    api.saveState(built).catch(() => {});
+    lsSet(LS_STATE, built);
+    if (!serverAppState) api.saveState(built).catch(() => {});
     setStateReady(true);
   };
 
@@ -3004,7 +2950,6 @@ export default function FitGeo() {
     const newProfile = { ...profile, ...updated };
     lsSet(LS_PROFILE, newProfile);
     setProfile(newProfile);
-    // Recalculate goals from updated profile, keep current consumption values
     const goals = makeCleanState(newProfile);
     updateState(s => ({
       calories: { ...s.calories, goal: goals.calories.goal },
@@ -3034,7 +2979,12 @@ export default function FitGeo() {
     </Ctx.Provider>
   );
 
-  const TABS = [{ id: "home", l: "მთავარი", I: Home }, { id: "food", l: "კვება", I: Utensils }, { id: "workout", l: "ვარჯიში", I: Dumbbell }, { id: "profile", l: "პროფილი", I: User }];
+  const TABS = [
+    { id: "home",    l: "მთავარი", I: Home     },
+    { id: "food",    l: "კვება",   I: Utensils },
+    { id: "workout", l: "ვარჯიში", I: Dumbbell },
+    { id: "profile", l: "პროფილი", I: User     },
+  ];
 
   if (showAdmin && profile?.isAdmin) return (
     <Ctx.Provider value={{ state, updateState, showToast, profile }}>
@@ -3048,41 +2998,35 @@ export default function FitGeo() {
       <style>{css}</style>
       <div className="app">
         <div className="page">
-          {tab === "home" && <HomePage profile={profile} />}
-          {tab === "food" && <FoodPage />}
+          {tab === "home"    && <HomePage profile={profile} />}
+          {tab === "food"    && <FoodPage />}
           {tab === "workout" && <WorkoutPage />}
-          {tab === "profile" && <ProfilePage profile={profile} onLogout={handleLogout} onAdmin={profile?.isAdmin ? () => setShowAdmin(true) : null} onProfileUpdate={handleProfileUpdate} />}
+          {tab === "profile" && (
+            <ProfilePage
+              profile={profile}
+              onLogout={handleLogout}
+              onAdmin={profile?.isAdmin ? () => setShowAdmin(true) : null}
+              onProfileUpdate={handleProfileUpdate}
+            />
+          )}
         </div>
         <nav className="bnav">
-          {TABS.slice(0, 2).map(t => <button key={t.id} className={`ni ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}><t.I size={21} strokeWidth={tab === t.id ? 2.5 : 1.8} /><span>{t.l}</span></button>)}
-          <button className="fab" onClick={() => setShowAdd(true)}><Plus size={24} color="#0a0a0a" strokeWidth={2.5} /></button>
-          {TABS.slice(2).map(t => <button key={t.id} className={`ni ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}><t.I size={21} strokeWidth={tab === t.id ? 2.5 : 1.8} /><span>{t.l}</span></button>)}
+          {TABS.slice(0, 2).map(t => (
+            <button key={t.id} className={`ni ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
+              <t.I size={21} strokeWidth={tab === t.id ? 2.5 : 1.8} /><span>{t.l}</span>
+            </button>
+          ))}
+          <button className="fab" onClick={() => setShowAdd(true)}>
+            <Plus size={24} color="#0a0a0a" strokeWidth={2.5} />
+          </button>
+          {TABS.slice(2).map(t => (
+            <button key={t.id} className={`ni ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
+              <t.I size={21} strokeWidth={tab === t.id ? 2.5 : 1.8} /><span>{t.l}</span>
+            </button>
+          ))}
         </nav>
         {showAdd && <AddModal onClose={() => setShowAdd(false)} />}
-        {toast && <div className="toast">{toast}</div>}
-        {showWeightModal && (
-          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.65)", zIndex:9999, display:"flex", alignItems:"center", justifyContent:"center" }}>
-            <div style={{ background:"var(--bg,#fff)", borderRadius:22, padding:"32px 28px", width:300, textAlign:"center", boxShadow:"0 8px 40px rgba(0,0,0,0.25)" }}>
-              <div style={{ fontSize:36, marginBottom:10 }}>⚖️</div>
-              <div style={{ fontSize:17, fontWeight:700, marginBottom:6 }}>შეიყვანეთ თქვენი წონა</div>
-              <div style={{ fontSize:13, color:"var(--t2,#888)", marginBottom:22 }}>გთხოვთ დაადასტუროთ მიმდინარე წონა</div>
-              <input
-                type="number" placeholder="კგ (მაგ: 82)"
-                value={weightModalInput}
-                onChange={e => setWeightModalInput(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && handleWeightModalSubmit()}
-                autoFocus
-                style={{ width:"100%", boxSizing:"border-box", padding:"13px 16px", borderRadius:13, border:"1.5px solid var(--border,#ddd)", fontSize:20, textAlign:"center", background:"var(--card,#f5f5f5)", color:"var(--text,#111)", marginBottom:14, outline:"none" }}
-              />
-              <button onClick={handleWeightModalSubmit} style={{ width:"100%", padding:14, borderRadius:13, background:"var(--accent,#34c759)", color:"#fff", fontWeight:700, fontSize:15, border:"none", cursor:"pointer", marginBottom:8 }}>
-                შენახვა
-              </button>
-              <button onClick={() => setShowWeightModal(false)} style={{ width:"100%", padding:10, borderRadius:13, background:"transparent", color:"var(--t2,#888)", fontSize:13, border:"none", cursor:"pointer" }}>
-                გამოტოვება
-              </button>
-            </div>
-          </div>
-        )}
+        {toast   && <div className="toast">{toast}</div>}
       </div>
     </Ctx.Provider>
   );
