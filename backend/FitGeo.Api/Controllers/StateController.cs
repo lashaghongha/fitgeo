@@ -13,50 +13,53 @@ namespace FitGeo.Api.Controllers;
 [Authorize]
 public class StateController(AppDbContext db) : ControllerBase
 {
-    static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
+    static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
     int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
+    // GET /api/state  — returns profile + saved appState
     [HttpGet]
-    public async Task<IActionResult> GetState()
+    public async Task<IActionResult> Get()
     {
-        var user = await db.Users.Include(u => u.AppState).FirstOrDefaultAsync(u => u.Id == UserId);
+        var user = await db.Users
+            .Include(u => u.AppState)
+            .FirstOrDefaultAsync(u => u.Id == UserId);
+
         if (user is null) return NotFound();
 
         object? appState = null;
         if (user.AppState is not null)
-        {
-            try { appState = JsonSerializer.Deserialize<object>(user.AppState.StateJson, JsonOpts); }
+            try { appState = JsonSerializer.Deserialize<object>(user.AppState.StateJson, Json); }
             catch { }
-        }
 
         return Ok(new
         {
-            profile = new { user.Name, user.Age, user.Gender, user.Height, user.Weight, user.Goal, user.Activity, user.IsAdmin },
+            profile = new { user.Name, user.Age, user.Gender, user.Height,
+                            user.Weight, user.Goal, user.Activity, user.IsAdmin },
             appState
         });
     }
 
+    // PUT /api/state  — save full appState JSON
     [HttpPut]
-    public async Task<IActionResult> SaveState([FromBody] JsonElement body)
+    public async Task<IActionResult> Save([FromBody] JsonElement body)
     {
         var record = await db.AppStates.FirstOrDefaultAsync(a => a.UserId == UserId);
-        var json = body.GetRawText();
+        var json   = body.GetRawText();
 
         if (record is null)
-        {
             db.AppStates.Add(new AppStateRecord { UserId = UserId, StateJson = json, UpdatedAt = DateTime.UtcNow });
-        }
         else
         {
-            record.StateJson = json;
-            record.UpdatedAt = DateTime.UtcNow;
+            record.StateJson  = json;
+            record.UpdatedAt  = DateTime.UtcNow;
         }
 
         await db.SaveChangesAsync();
         return NoContent();
     }
 
+    // PUT /api/state/profile  — update profile fields (including weight)
     [HttpPut("profile")]
     public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileRequest req)
     {
@@ -71,9 +74,10 @@ public class StateController(AppDbContext db) : ControllerBase
         if (req.Activity is not null) user.Activity = req.Activity;
 
         await db.SaveChangesAsync();
-
-        return Ok(new { user.Name, user.Age, user.Gender, user.Height, user.Weight, user.Goal, user.Activity, user.IsAdmin });
+        return Ok(new { user.Name, user.Age, user.Gender, user.Height,
+                        user.Weight, user.Goal, user.Activity, user.IsAdmin });
     }
 }
 
-public record UpdateProfileRequest(string? Age, string? Gender, string? Height, string? Weight, string? Goal, string? Activity);
+public record UpdateProfileRequest(string? Age, string? Gender, string? Height,
+                                    string? Weight, string? Goal, string? Activity);

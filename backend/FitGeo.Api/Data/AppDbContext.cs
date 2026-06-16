@@ -9,14 +9,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<AppStateRecord> AppStates => Set<AppStateRecord>();
     public DbSet<MealStore> MealStores => Set<MealStore>();
 
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    protected override void OnModelCreating(ModelBuilder mb)
     {
-        modelBuilder.Entity<User>()
+        mb.Entity<User>()
             .HasOne(u => u.AppState)
             .WithOne(a => a.User)
-            .HasForeignKey<AppStateRecord>(a => a.UserId);
+            .HasForeignKey<AppStateRecord>(a => a.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
 
-        modelBuilder.Entity<User>()
+        mb.Entity<User>()
             .HasIndex(u => u.Name)
             .IsUnique();
     }
