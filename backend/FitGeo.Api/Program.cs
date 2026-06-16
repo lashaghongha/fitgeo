@@ -8,8 +8,15 @@ using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Use Postgres on Railway (DATABASE_URL env var), SQLite locally
+var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL");
 builder.Services.AddDbContext<AppDbContext>(opt =>
-    opt.UseSqlite(builder.Configuration.GetConnectionString("Default") ?? "Data Source=fitgeo.db"));
+{
+    if (!string.IsNullOrEmpty(databaseUrl))
+        opt.UseNpgsql(databaseUrl);
+    else
+        opt.UseSqlite(builder.Configuration.GetConnectionString("Default") ?? "Data Source=fitgeo.db");
+});
 
 var jwtKey = builder.Configuration["Jwt:Key"]
     ?? throw new InvalidOperationException("Jwt:Key is not configured");
@@ -83,7 +90,7 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var ctx = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    ctx.Database.EnsureCreated();
+    ctx.Database.EnsureCreated(); // works for both SQLite and Postgres (no migrations needed)
     await MealSeed.SeedAsync(ctx);
 }
 
