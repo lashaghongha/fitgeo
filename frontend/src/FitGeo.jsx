@@ -2956,8 +2956,15 @@ export default function FitGeo() {
       .then(data => {
         const profileData = data?.profile || JSON.parse(localStorage.getItem("fitgeo_profile") || "null");
         if (data?.profile) {
-          setProfile(data.profile);
-          localStorage.setItem("fitgeo_profile", JSON.stringify(data.profile));
+          // Never let server's default weight=75 overwrite a real locally-saved weight
+          const localProfile = JSON.parse(localStorage.getItem("fitgeo_profile") || "null");
+          const localW  = parseFloat(localProfile?.weight) || 0;
+          const serverW = parseFloat(data.profile?.weight) || 75;
+          const merged  = (localW > 0 && Math.abs(localW - 75) > 0.5 && Math.abs(serverW - 75) < 0.1)
+            ? { ...data.profile, weight: String(localW) }
+            : data.profile;
+          setProfile(merged);
+          localStorage.setItem("fitgeo_profile", JSON.stringify(merged));
         }
         if (profileData) {
           // Prefer localStorage weight if server has corrupted default (75)
