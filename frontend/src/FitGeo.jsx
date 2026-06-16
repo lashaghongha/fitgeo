@@ -2894,6 +2894,8 @@ export default function FitGeo() {
   // Auto-save is blocked until stateReady = true to prevent INIT from overwriting real data.
   const [stateReady, setStateReady] = useState(!api.getToken());
   const [showAdmin, setShowAdmin] = useState(false);
+  const [showWeightModal, setShowWeightModal] = useState(false);
+  const [weightModalInput, setWeightModalInput] = useState("");
 
   const showToast = msg => { setToast(msg); setTimeout(() => setToast(null), 2200); };
   const updateState = useCallback(fn => setState(p => ({ ...p, ...fn(p) })), []);
@@ -2981,6 +2983,13 @@ export default function FitGeo() {
           saveLocalState(merged);
         }
         setStateReady(true);
+        // If weight looks like INIT default (75, no real history), prompt user to enter real weight
+        const finalW = built?.weight?.current ?? state.weight?.current;
+        if (finalW !== undefined && Math.abs(finalW - 75) < 0.1) {
+          const hist = built?.weight?.history || state.weight?.history || [];
+          const hasOnlyDefault = hist.length === 0 || hist.every(w => Math.abs(w - 75) < 0.1);
+          if (hasOnlyDefault) setShowWeightModal(true);
+        }
       })
       .catch(() => {
         const localProfile = JSON.parse(localStorage.getItem("fitgeo_profile") || "null");
@@ -3005,6 +3014,19 @@ export default function FitGeo() {
     }, 1500);
     return () => clearTimeout(t);
   }, [state, appLoading, stateReady]);
+
+  const handleWeightModalSubmit = () => {
+    const w = parseFloat(weightModalInput);
+    if (!w || w < 20 || w > 300) return;
+    updateState(p => ({ weight: { ...p.weight, current: w, history: [w] } }));
+    const newProfile = { ...profile, weight: String(w) };
+    setProfile(newProfile);
+    localStorage.setItem("fitgeo_profile", JSON.stringify(newProfile));
+    api.updateProfile({ weight: String(w) }).catch(() => {});
+    setShowWeightModal(false);
+    setWeightModalInput("");
+    showToast("⚖️ წონა განახლდა!");
+  };
 
   const handleOnboardingDone = (profileData, serverState) => {
     // Set profile immediately so UI can render
@@ -3089,6 +3111,29 @@ export default function FitGeo() {
         </nav>
         {showAdd && <AddModal onClose={() => setShowAdd(false)} />}
         {toast && <div className="toast">{toast}</div>}
+        {showWeightModal && (
+          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.65)", zIndex:9999, display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <div style={{ background:"var(--bg,#fff)", borderRadius:22, padding:"32px 28px", width:300, textAlign:"center", boxShadow:"0 8px 40px rgba(0,0,0,0.25)" }}>
+              <div style={{ fontSize:36, marginBottom:10 }}>⚖️</div>
+              <div style={{ fontSize:17, fontWeight:700, marginBottom:6 }}>შეიყვანეთ თქვენი წონა</div>
+              <div style={{ fontSize:13, color:"var(--t2,#888)", marginBottom:22 }}>გთხოვთ დაადასტუროთ მიმდინარე წონა</div>
+              <input
+                type="number" placeholder="კგ (მაგ: 82)"
+                value={weightModalInput}
+                onChange={e => setWeightModalInput(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleWeightModalSubmit()}
+                autoFocus
+                style={{ width:"100%", boxSizing:"border-box", padding:"13px 16px", borderRadius:13, border:"1.5px solid var(--border,#ddd)", fontSize:20, textAlign:"center", background:"var(--card,#f5f5f5)", color:"var(--text,#111)", marginBottom:14, outline:"none" }}
+              />
+              <button onClick={handleWeightModalSubmit} style={{ width:"100%", padding:14, borderRadius:13, background:"var(--accent,#34c759)", color:"#fff", fontWeight:700, fontSize:15, border:"none", cursor:"pointer", marginBottom:8 }}>
+                შენახვა
+              </button>
+              <button onClick={() => setShowWeightModal(false)} style={{ width:"100%", padding:10, borderRadius:13, background:"transparent", color:"var(--t2,#888)", fontSize:13, border:"none", cursor:"pointer" }}>
+                გამოტოვება
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </Ctx.Provider>
   );
